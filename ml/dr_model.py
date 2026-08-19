@@ -95,11 +95,12 @@ def _prediction_from_tensor(image: tf.Tensor) -> dict[str, Any]:
 # ============================================================
 
 def predict_dr_severity(image_path):
-
+    _get_model()
     return _prediction_from_tensor(preprocess_image(tf.io.read_file(image_path)))
 
 
 def predict_dr_severity_bytes(image_bytes: bytes) -> dict[str, Any]:
+    _get_model()
     return _prediction_from_tensor(preprocess_image(image_bytes))
 
 

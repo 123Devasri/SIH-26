@@ -48,6 +48,13 @@ pip install -r backend/requirements.txt
 Copy-Item backend\.env.example backend\.env
 ```
 
+For real EfficientNet prediction and Grad-CAM, use Python 3.11–3.13 and
+install the optional ML runtime as well:
+
+```powershell
+pip install -r backend/requirements-ml.txt
+```
+
 Edit `backend/.env` as needed:
 
 ```

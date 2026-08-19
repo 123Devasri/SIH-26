@@ -6,7 +6,7 @@ const client = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
 });
-const mock = import.meta.env.VITE_USE_MOCK_API !== "false";
+const mock = import.meta.env.VITE_USE_MOCK_API === "true";
 
 const mockSessions = {};
 const mockReply = (sessionId, message) => {
