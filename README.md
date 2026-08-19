@@ -1,86 +1,70 @@
-# DR Screening Chatbot Module
+# AI Diabetic Retinopathy Screening System
 
-A conversational intake chatbot for an AI-based Diabetic Retinopathy
-screening system. This module **only** handles the patient conversation:
-collecting clinical information in natural language, extracting it with
-Grok, tracking conversation state, and exporting patient JSON for a
-downstream screening pipeline.
-
-It does **not** include DR detection, fundus image analysis, SHAP,
-PDF generation, dashboards, triage engines, or authentication — those
-are separate modules.
+Unified SIH integration project containing the React frontend, the existing
+chatbot intake module, and the existing five-class Keras retinal model.
+The backend is one FastAPI application: it exposes `/chat`, `/session/{id}`,
+`/screening/predict`, and `/screening/explain`.
 
 ---
 
 ## 1. Folder Structure
 
 ```
-dr-chatbot/
+SIH-26/
 ├── backend/
-│   ├── main.py                    # FastAPI app, /chat and /session endpoints
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── data/                      # session_<id>.json files are written here
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── schemas.py             # Pydantic models + core field list
-│   ├── services/
-│   │   ├── __init__.py
-│   │   └── grok_service.py        # Grok (xAI) extraction engine
-│   └── core/
-│       ├── __init__.py
-│       ├── session_manager.py     # JSON-file session storage & merging
-│       └── validation.py          # Clinical value range validation
-└── frontend/
-    ├── package.json
-    ├── vite.config.js
-    ├── index.html
-    ├── .env.example
-    └── src/
-        ├── main.jsx
-        ├── App.jsx
-        ├── App.css
-        ├── api/
-        │   └── chatApi.js
-        └── components/
-            ├── ChatWindow.jsx
-            ├── MessageBubble.jsx
-            ├── TypingIndicator.jsx
-            └── InputBox.jsx
+│   ├── main.py                    # Unified FastAPI app
+│   ├── routes/screening.py        # Prediction and Grad-CAM endpoints
+│   ├── services/model_service.py
+│   └── services/nlp_service.py
+├── backend/core/                  # Session manager and validation
+├── backend/models/                # Chatbot schemas
+├── ml/
+│   ├── dr_model.py                # Existing model wrapper + Grad-CAM
+│   └── models/prototype_model.keras
+├── frontend/
+│   ├── package.json
+│   └── src/
+│       ├── api/                   # Backend adapters
+│       ├── pages/                 # Screening, analysis, assistant, reports
+│       └── components/
+└── README.md
 ```
 
 ---
 
 ## 2. Installation Steps
 
-Prerequisites: **Python 3.11+**, **Node.js 18+**, and a Grok (xAI) API key
-from https://console.x.ai.
+Prerequisites: **Python 3.11–3.13**, **Node.js 18+**, and the TensorFlow runtime
+supported by the installed Python version. The current chatbot backend uses
+the updated rule-based NLP service, so no frontend secret is required.
 
 ### Backend setup
 
-```bash
-cd backend
+```powershell
+cd C:\Users\devasri\OneDrive\Desktop\projects\SIH-26
 python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
+venv\Scripts\Activate.ps1
+pip install -r backend/requirements.txt
+Copy-Item backend\.env.example backend\.env
 ```
 
-Edit `backend/.env` and set your key:
+Edit `backend/.env` as needed:
 
 ```
-GROK_API_KEY=your_actual_key_here
-GROK_MODEL=grok-2-latest
-GROK_BASE_URL=https://api.x.ai/v1
+MODEL_PATH=ml/models/prototype_model.keras
 DATA_DIR=data
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
 Run the backend:
 
-```bash
-uvicorn main:app --reload --port 8000
+```powershell
+uvicorn backend.main:app --reload --port 8000
 ```
+
+Run this command from the repository root, not from `frontend` or `backend`.
+The chatbot endpoints work without TensorFlow; image prediction and Grad-CAM
+require a Python version supported by the installed TensorFlow package.
 
 The API is now live at `http://localhost:8000`. Interactive docs at
 `http://localhost:8000/docs`.
@@ -97,6 +81,7 @@ Edit `frontend/.env` if your backend runs somewhere other than
 `http://localhost:8000`:
 
 ```
+VITE_USE_MOCK_API=false
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
@@ -114,9 +99,7 @@ Open `http://localhost:5173` in your browser.
 
 | File               | Variable            | Description                                   |
 |--------------------|----------------------|------------------------------------------------|
-| backend/.env       | `GROK_API_KEY`       | Your xAI Grok API key (required)               |
-| backend/.env       | `GROK_MODEL`         | Grok model name (default `grok-2-latest`)       |
-| backend/.env       | `GROK_BASE_URL`      | xAI OpenAI-compatible base URL                  |
+| backend/.env       | `MODEL_PATH`         | Existing Keras model path                       |
 | backend/.env       | `DATA_DIR`           | Folder for session JSON files (default `data`)  |
 | backend/.env       | `ALLOWED_ORIGINS`    | Comma-separated CORS origins                    |
 | frontend/.env      | `VITE_API_BASE_URL`  | URL of the FastAPI backend                      |
@@ -126,8 +109,8 @@ Open `http://localhost:5173` in your browser.
 ## 4. Run Commands (quick reference)
 
 ```bash
-# Terminal 1 — backend
-cd backend && uvicorn main:app --reload --port 8000
+# Terminal 1 — backend (from repository root)
+uvicorn backend.main:app --reload --port 8000
 
 # Terminal 2 — frontend
 cd frontend && npm run dev
@@ -136,6 +119,16 @@ cd frontend && npm run dev
 ---
 
 ## 5. API Reference
+
+### `POST /screening/predict`
+
+Multipart form field: `image`. Returns the actual five probabilities,
+predicted grade, severity label, and model confidence.
+
+### `POST /screening/explain`
+
+Multipart form field: `image`. Returns the prediction plus base64 data URIs
+for the original image, Grad-CAM heatmap, and overlay.
 
 ### `POST /chat`
 

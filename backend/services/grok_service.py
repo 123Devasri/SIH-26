@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI, APIError, APIConnectionError, AuthenticationError
 
-from models.schemas import CORE_FIELDS, REQUIRED_FIELDS
+from backend.models.schemas import CORE_FIELDS, REQUIRED_FIELDS
 
 GROK_API_KEY = os.environ.get("GROK_API_KEY", "")
 GROK_MODEL = os.environ.get("GROK_MODEL", "grok-2-latest")

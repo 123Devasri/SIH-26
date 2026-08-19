@@ -20,7 +20,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError, ServerError
 
-from models.schemas import CORE_FIELDS, REQUIRED_FIELDS
+from backend.models.schemas import CORE_FIELDS, REQUIRED_FIELDS
 
 load_dotenv()
 

@@ -1,14 +1,13 @@
 """
-FastAPI backend for the Diabetic Retinopathy Screening Chatbot module.
+Unified FastAPI backend for chatbot intake and retinal screening.
 
 Endpoints:
     POST /chat                -> converse with the patient
     GET  /session/{session_id} -> fetch stored session JSON
     GET  /health               -> simple health check
 
-This module ONLY implements the conversational intake chatbot. It does
-NOT implement DR detection, image analysis, SHAP, PDF export, dashboards,
-triage engines, or authentication.
+The chatbot remains an intake module; screening routes delegate prediction
+and Grad-CAM to the existing Keras model wrapper in ``ml/dr_model.py``.
 
 NLP Engine: fully rule-based (no external API calls required).
 """
@@ -20,18 +19,19 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from core import session_manager, validation
-from models.schemas import ChatRequest, ChatResponse, REQUIRED_FIELDS
-from services.nlp_service import extract_information
+from backend.core import session_manager, validation
+from backend.models.schemas import ChatRequest, ChatResponse, REQUIRED_FIELDS
+from backend.services.nlp_service import extract_information
+from backend.routes.screening import router as screening_router
 
 app = FastAPI(
-    title="DR Screening Chatbot API",
-    description="Conversational intake module for a diabetic retinopathy screening system.",
+    title="DR Screening Integration API",
+    description="Unified chatbot and diabetic retinopathy screening API.",
     version="2.0.0",
 )
 
@@ -50,6 +50,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(screening_router)
 
 
 # ---------------------------------------------------------------------------

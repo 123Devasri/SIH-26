@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from models.schemas import CORE_FIELDS, REQUIRED_FIELDS
+from backend.models.schemas import CORE_FIELDS, REQUIRED_FIELDS
 
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 
