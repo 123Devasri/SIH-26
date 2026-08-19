@@ -9,6 +9,8 @@ Endpoints:
 This module ONLY implements the conversational intake chatbot. It does
 NOT implement DR detection, image analysis, SHAP, PDF export, dashboards,
 triage engines, or authentication.
+
+NLP Engine: fully rule-based (no external API calls required).
 """
 
 from __future__ import annotations
@@ -25,12 +27,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core import session_manager, validation
 from models.schemas import ChatRequest, ChatResponse, REQUIRED_FIELDS
-from services.gemini_service import extract_information, GeminiServiceError
+from services.nlp_service import extract_information
 
 app = FastAPI(
     title="DR Screening Chatbot API",
     description="Conversational intake module for a diabetic retinopathy screening system.",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 allowed_origins = [
@@ -50,34 +52,59 @@ app.add_middleware(
 )
 
 
-FIELD_QUESTIONS = {
-    "age": "Could you tell me your age?",
-    "diabetes_duration": "How many years have you had diabetes?",
-    "hba1c": "Do you know your most recent HbA1c value?",
-    "blood_pressure": "Could you share your latest blood pressure reading (e.g. 120/80)?",
-}
-
+# ---------------------------------------------------------------------------
+# Greeting — sent once when a brand-new session opens.
+# The NLP engine handles all follow-up questions dynamically.
+# ---------------------------------------------------------------------------
 GREETING = (
-    "Hi, I'm here to gather a few details about your health before your "
-    "diabetic retinopathy screening. Could you start by telling me your "
-    "age and how long you've had diabetes?"
+    "Hello! 👋 I'm Dr. Rita, your virtual screening assistant. "
+    "I'll ask you a few quick questions about your health before your "
+    "diabetic retinopathy screening. Let's start — what's your name?"
 )
 
 COMPLETION_MESSAGE = (
-    "Thank you. The required information has been collected successfully."
+    "Thank you so much! 🎉 All the required information has been collected "
+    "successfully. The screening team will review your details shortly. "
+    "Take care!"
+)
+
+CONFIRMATION_REQUEST_TEMPLATE = (
+    "Just to confirm — you mentioned {field} of '{value}'. "
+    "That looks a little unusual — could you double-check and confirm it's correct?"
 )
 
 
-def _fallback_question(missing_fields: list) -> str:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fallback_question(missing_fields: list, name: str | None = None) -> str:
+    """
+    Deterministic fallback question when the NLP engine returns no next_question.
+    Used only as a safety net.
+    """
+    field_questions = {
+        "age": "Could you tell me your age?",
+        "diabetes_duration": "How many years have you had diabetes?",
+        "hba1c": "Do you know your most recent HbA1c value?",
+        "blood_pressure": "Could you share your latest blood pressure reading (e.g. 120/80)?",
+    }
     for field in REQUIRED_FIELDS:
         if field in missing_fields:
-            return FIELD_QUESTIONS.get(field, f"Could you tell me your {field.replace('_', ' ')}?")
-    return "Thank you, is there anything else about your eyes or health you'd like to add?"
+            q = field_questions.get(field, f"Could you tell me your {field.replace('_', ' ')}?")
+            if name:
+                return f"{name}, {q[0].lower()}{q[1:]}"
+            return q
+    return "Is there anything else about your eyes or health you'd like to add?"
 
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "engine": "rule-based-nlp"}
 
 
 @app.get("/session/{session_id}")
@@ -98,8 +125,10 @@ def chat(payload: ChatRequest) -> ChatResponse:
 
     session = session_manager.load_session(session_id)
 
-    # Empty message handling: brand-new session gets a greeting instead
-    # of an error; an empty message on an existing session is rejected.
+    # ------------------------------------------------------------------
+    # Empty message: brand-new session gets the greeting; existing
+    # sessions reject empty messages.
+    # ------------------------------------------------------------------
     if not message:
         if not session["conversation_history"]:
             session_manager.append_turn(session, "assistant", GREETING)
@@ -113,36 +142,49 @@ def chat(payload: ChatRequest) -> ChatResponse:
 
     session_manager.append_turn(session, "user", message)
 
-    # If we previously asked the patient to confirm a suspicious value,
-    # handle that confirmation before running extraction again.
+    # ------------------------------------------------------------------
+    # Pending confirmation: patient is confirming (or denying) a
+    # previously flagged suspicious value.
+    # ------------------------------------------------------------------
     if session.get("pending_confirmation"):
         pending = session["pending_confirmation"]
         lowered = message.lower()
-        if any(word in lowered for word in ["yes", "correct", "right", "confirm"]):
+        if any(w in lowered for w in ["yes", "correct", "right", "confirm", "yeah", "yep", "yup"]):
             session["structured_data"][pending["field"]] = pending["value"]
         session["pending_confirmation"] = None
 
-    try:
-        extraction = extract_information(
-            latest_message=message,
-            conversation_history=session["conversation_history"],
-            known_structured=session["structured_data"],
-            known_dynamic=session["dynamic_data"],
-        )
-    except GeminiServiceError as exc:
-        # Surface a clean error to the user instead of a stack trace,
-        # and still persist the user's message so nothing is lost.
-        # NOTE: we save here WITHOUT merging new data because we don't
-        # have a successful extraction result — the session already has
-        # whatever was previously saved, so no data is lost.
-        session_manager.save_session(session)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # ------------------------------------------------------------------
+    # Run NLP extraction
+    # ------------------------------------------------------------------
+    extraction = extract_information(
+        latest_message=message,
+        conversation_history=session["conversation_history"],
+        known_structured=session["structured_data"],
+        known_dynamic=session["dynamic_data"],
+    )
 
     new_structured = extraction["structured_data"]
     new_dynamic = extraction["dynamic_data"]
+    intent = extraction.get("intent", "data")
 
-    # Validate before merging: flag suspicious values for confirmation
-    # rather than silently accepting impossible clinical numbers.
+    # ------------------------------------------------------------------
+    # If the intent produced a full reply override (greeting, confusion,
+    # farewell, etc.), use it directly without merging any data.
+    # ------------------------------------------------------------------
+    if "reply_override" in extraction:
+        reply = extraction["reply_override"]
+        session_manager.append_turn(session, "assistant", reply)
+        session_manager.save_session(session)
+        missing = session_manager.get_missing_required_fields(session)
+        return ChatResponse(
+            reply=reply,
+            patient_state=session,
+            completed=len(missing) == 0 and session.get("completed", False),
+        )
+
+    # ------------------------------------------------------------------
+    # Validate before merging — flag suspicious clinical values.
+    # ------------------------------------------------------------------
     suspicious_fields = validation.validate_structured_data(new_structured)
 
     if suspicious_fields:
@@ -151,10 +193,8 @@ def chat(payload: ChatRequest) -> ChatResponse:
         session_manager.merge_structured_data(session, new_structured)
         session_manager.merge_dynamic_data(session, new_dynamic)
         session["pending_confirmation"] = {"field": field, "value": value}
-        reply = (
-            f"Just to confirm — you mentioned {field.replace('_', ' ')} of "
-            f"'{value}'. That looks unusual, could you double-check and "
-            f"confirm it's correct?"
+        reply = CONFIRMATION_REQUEST_TEMPLATE.format(
+            field=field.replace("_", " "), value=value
         )
         session_manager.append_turn(session, "assistant", reply)
         session_manager.save_session(session)
@@ -163,6 +203,9 @@ def chat(payload: ChatRequest) -> ChatResponse:
     session_manager.merge_structured_data(session, new_structured)
     session_manager.merge_dynamic_data(session, new_dynamic)
 
+    # ------------------------------------------------------------------
+    # Check completion
+    # ------------------------------------------------------------------
     missing = session_manager.get_missing_required_fields(session)
     completed = len(missing) == 0
 
@@ -170,21 +213,13 @@ def chat(payload: ChatRequest) -> ChatResponse:
         session["completed"] = True
         reply = COMPLETION_MESSAGE
     else:
-        gemini_question = extraction.get("next_question") or ""
-        # Safety check: if Gemini asks about a field that is already collected,
-        # ignore its suggestion and use the deterministic fallback instead.
-        already_collected = [
-            f for f in REQUIRED_FIELDS
-            if f not in missing
-        ]
-        question_mentions_collected = any(
-            f.replace("_", " ") in gemini_question.lower() or f in gemini_question.lower()
-            for f in already_collected
-        )
-        if gemini_question and not question_mentions_collected:
-            reply = gemini_question
+        # Use the NLP-generated contextual question, fall back to static
+        nlp_question = extraction.get("next_question", "").strip()
+        if nlp_question:
+            reply = nlp_question
         else:
-            reply = _fallback_question(missing)
+            known_name = session["structured_data"].get("name")
+            reply = _fallback_question(missing, known_name)
 
     session_manager.append_turn(session, "assistant", reply)
     session_manager.save_session(session)

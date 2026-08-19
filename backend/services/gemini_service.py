@@ -25,8 +25,7 @@ from models.schemas import CORE_FIELDS, REQUIRED_FIELDS
 load_dotenv()
 
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "")
+# NOTE: Read from env inside _get_client() so hot-reload picks up changes.
 
 
 SYSTEM_PROMPT = f"""
@@ -132,22 +131,24 @@ class GeminiServiceError(Exception):
     """Raised when Gemini cannot be reached or returns invalid data."""
 
 
-def _get_client() -> genai.Client:
-    if not GEMINI_API_KEY:
+def _get_client() -> tuple[genai.Client, str]:
+    """Return (client, model_name) reading env vars fresh each call."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    model = os.environ.get("GEMINI_MODEL", "").strip()
+
+    if not api_key:
         raise GeminiServiceError(
             "GEMINI_API_KEY is not set. "
             "Add it to backend/.env."
         )
 
-    if not GEMINI_MODEL:
+    if not model:
         raise GeminiServiceError(
             "GEMINI_MODEL is not set. "
             "Add a valid Gemini model to backend/.env."
         )
 
-    return genai.Client(
-        api_key=GEMINI_API_KEY
-    )
+    return genai.Client(api_key=api_key), model
 
 
 def _build_context_text(
@@ -347,7 +348,7 @@ def extract_information(
     }
     """
 
-    client = _get_client()
+    client, model_name = _get_client()
 
     # Pre-calculate missing fields so we can include them in the context
     # and so Gemini knows which fields are already collected.
@@ -367,7 +368,7 @@ def extract_information(
     try:
 
         response = client.models.generate_content(
-            model=GEMINI_MODEL,
+            model=model_name,
             contents=context_text,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -402,7 +403,7 @@ def extract_information(
 
         if "404" in message or "NOT_FOUND" in message:
             raise GeminiServiceError(
-                f"Gemini model '{GEMINI_MODEL}' was not found "
+                f"Gemini model '{model_name}' was not found "
                 "or is unavailable to your account."
             ) from exc
 
